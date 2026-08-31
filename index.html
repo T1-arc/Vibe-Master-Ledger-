@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>VIBE Ledger</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#1a2433" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="VIBE Ledger" />
+
+<!-- React (no build step needed) -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+<!-- Firebase (compat build = plain script tags, no bundler needed) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<!-- Icons -->
+<script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #F7F5F0; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; color: #1a2433; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid #1F3864; outline-offset: 1px; }
+  ::placeholder { color: #9aa3b0; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+  SETUP: paste your Firebase project config below.
+  Create a free project at https://console.firebase.google.com
+  → Build > Firestore Database > Create database (start in test mode is fine to begin)
+  → Build > Authentication > Sign-in method > enable "Anonymous"
+  → Project settings (gear icon) > General > Your apps > Web app > copy the config object
+============================================================= -->
+<script>
+  window.FIREBASE_CONFIG = {
+    apiKey: "AIzaSyBxpPm4VMK5psddtEOfLDsCTvyPqiTh7RE",
+    authDomain: "vibe-master-ledger.firebaseapp.com",
+    projectId: "vibe-master-ledger",
+    storageBucket: "vibe-master-ledger.firebasestorage.app",
+    messagingSenderId: "601653876891",
+    appId: "1:601653876891:web:d4595fe83b72a5acc38e3e"
+  };
+</script>
+
+<div id="root">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#8a8474;font-size:14px;">
+    Loading VIBE Ledger…
+  </div>
+</div>
+
+<script type="text/babel" data-presets="react,env">
+const { useState, useEffect, useMemo } = React;
+const { Plus, X, Fuel, Receipt, Wallet, Truck, Package, HelpCircle, ChevronDown, Loader2, Download, CloudOff } = lucide;
+
+// ---- Firebase init ----
+firebase.initializeApp(window.FIREBASE_CONFIG);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const ENTRIES_COL = "vibe_ledger_entries";
+
+const SITES = [
+  { id: "WITCH", label: "Witchcliffe", color: "#1F3864" },
+  { id: "SIESTA", label: "Siesta Park", color: "#7A4419" },
+  { id: "BROAD", label: "Broadwater", color: "#2E5C4B" },
+];
+
+const CATEGORIES = [
+  { id: "wages", label: "Wages & payroll", icon: "Wallet" },
+  { id: "fuel", label: "Fuel commission", icon: "Fuel" },
+  { id: "royalty", label: "VIBE royalty / fees", icon: "Receipt" },
+  { id: "purchases", label: "Purchases / stock", icon: "Package" },
+  { id: "opex", label: "Opex (utilities, repairs, misc)", icon: "Truck" },
+  { id: "drawings", label: "Director drawings", icon: "Wallet" },
+  { id: "loan", label: "Director loan", icon: "Wallet" },
+  { id: "other", label: "Other / unsure", icon: "HelpCircle" },
+];
+const ICONS = { Wallet, Fuel, Receipt, Package, Truck, HelpCircle };
+const PEOPLE = ["Taha", "Usman"];
+
+const money = (n) =>
+  n < 0
+    ? `($${Math.abs(n).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+    : `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const monthKey = (iso) => iso.slice(0, 7);
+const monthLabel = (key) => {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
+};
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [connError, setConnError] = useState(false);
+  const [entries, setEntries] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const [siteFilter, setSiteFilter] = useState("ALL");
+  const [monthFilter, setMonthFilter] = useState(monthKey(todayISO()));
+  const [formOpen, setFormOpen] = useState(false);
+
+  const [form, setForm] = useState({
+    site: "WITCH", date: todayISO(), amount: "", category: "purchases",
+    payee: "", enteredBy: "Taha", notes: "",
+  });
+
+  // Anonymous sign-in, then live subscription to shared entries
+  useEffect(() => {
+    auth.signInAnonymously().catch(() => setConnError(true));
+    const unsubAuth = auth.onAuthStateChanged((user) => {
+      if (user) setAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    const unsub = db.collection(ENTRIES_COL).orderBy("date", "desc").onSnapshot(
+      (snap) => {
+        setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoaded(true);
+      },
+      () => { setConnError(true); setLoaded(true); }
+    );
+    return () => unsub();
+  }, [authReady]);
+
+  const addEntry = async () => {
+    const amt = parseFloat(form.amount);
+    if (!form.date || isNaN(amt) || amt === 0 || !form.payee.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await db.collection(ENTRIES_COL).add({ ...form, amount: amt, createdAt: Date.now() });
+      setForm((f) => ({ ...f, amount: "", payee: "", notes: "" }));
+      setFormOpen(false);
+    } catch (e) {
+      setError("Couldn't save — check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const months = useMemo(() => {
+    const set = new Set(entries.map((e) => monthKey(e.date)));
+    set.add(monthKey(todayISO()));
+    return Array.from(set).sort().reverse();
+  }, [entries]);
+
+  const filtered = useMemo(() => {
+    return entries
+      .filter((e) => (siteFilter === "ALL" ? true : e.site === siteFilter))
+      .filter((e) => monthKey(e.date) === monthFilter);
+  }, [entries, siteFilter, monthFilter]);
+
+  const totalsBySite = useMemo(() => {
+    const t = { WITCH: 0, SIESTA: 0, BROAD: 0 };
+    entries.filter((e) => monthKey(e.date) === monthFilter).forEach((e) => (t[e.site] += e.amount));
+    return t;
+  }, [entries, monthFilter]);
+
+  const grandTotal = SITES.reduce((s, site) => s + totalsBySite[site.id], 0);
+
+  const exportCsv = () => {
+    const header = ["Date", "Site", "Amount", "Category", "Payee", "Entered By", "Notes"];
+    const escape = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const rows = [...entries].sort((a, b) => (a.date < b.date ? -1 : 1)).map((e) => {
+      const cat = CATEGORIES.find((c) => c.id === e.category);
+      return [e.date, e.site, e.amount.toFixed(2), cat ? cat.label : e.category, e.payee, e.enteredBy, e.notes || ""].map(escape).join(",");
+    });
+    const csv = [header.map(escape).join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `vibe-ledger-export-${todayISO()}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  if (connError) {
+    return (
+      <div style={{...styles.app, ...styles.emptyState, flexDirection:"column", gap:10, paddingTop: 80}}>
+        <CloudOff size={28} color="#8a8474" />
+        <div style={{textAlign:"center", padding: "0 30px", fontSize: 14, color:"#6b6455"}}>
+          Can't connect to Firebase yet. Open index.html and check that FIREBASE_CONFIG has your real project keys pasted in (see the comment near the top of the file).
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.app}>
+      <header style={styles.header}>
+        <div>
+          <div style={styles.eyebrow}>Shared with Usman · live across devices</div>
+          <h1 style={styles.title}>VIBE Ledger</h1>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} style={styles.monthSelect}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+          <button style={styles.exportBtn} onClick={exportCsv} disabled={entries.length === 0}>
+            <Download size={13} /> Export CSV
+          </button>
+        </div>
+      </header>
+
+      <div style={styles.tabsRow}>
+        <button onClick={() => setSiteFilter("ALL")} style={{...styles.tab, ...(siteFilter === "ALL" ? styles.tabActive : {})}}>All sites</button>
+        {SITES.map((s) => (
+          <button key={s.id} onClick={() => setSiteFilter(s.id)}
+            style={{...styles.tab, ...(siteFilter === s.id ? {...styles.tabActive, borderColor: s.color, color: s.color} : {})}}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={styles.totalsStrip}>
+        {SITES.map((s) => (
+          <div key={s.id} style={styles.totalCard}>
+            <div style={{...styles.totalDot, background: s.color}} />
+            <div style={styles.totalLabel}>{s.label}</div>
+            <div style={styles.totalValue}>{money(totalsBySite[s.id])}</div>
+          </div>
+        ))}
+        <div style={{...styles.totalCard, background: "#1a2433"}}>
+          <div style={styles.totalLabelDark}>Month total</div>
+          <div style={styles.totalValueDark}>{money(grandTotal)}</div>
+        </div>
+      </div>
+
+      {error && <div style={styles.errorBanner}>{error}</div>}
+
+      <main style={styles.list}>
+        {!loaded ? (
+          <div style={styles.emptyState}><Loader2 size={18} className="spin" /><span>Loading the ledger…</span></div>
+        ) : filtered.length === 0 ? (
+          <div style={styles.emptyState}><span>No entries for {monthLabel(monthFilter)} yet. Add the first one below.</span></div>
+        ) : (
+          filtered.map((e) => {
+            const site = SITES.find((s) => s.id === e.site);
+            const cat = CATEGORIES.find((c) => c.id === e.category);
+            const Icon = cat ? ICONS[cat.icon] : HelpCircle;
+            return (
+              <div key={e.id} style={styles.row}>
+                <div style={{...styles.rowIcon, background: `${site.color}1A`, color: site.color}}><Icon size={16} /></div>
+                <div style={styles.rowMain}>
+                  <div style={styles.rowTop}>
+                    <span style={styles.rowPayee}>{e.payee}</span>
+                    <span style={styles.rowAmount}>{money(e.amount)}</span>
+                  </div>
+                  <div style={styles.rowSub}>
+                    {site.label} · {cat ? cat.label : "Other"} · {new Date(e.date).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} · {e.enteredBy}
+                  </div>
+                  {e.notes && <div style={styles.rowNotes}>{e.notes}</div>}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </main>
+
+      <button style={styles.fab} onClick={() => setFormOpen(true)} aria-label="Add entry"><Plus size={24} /></button>
+
+      {formOpen && (
+        <div style={styles.sheetOverlay} onClick={() => setFormOpen(false)}>
+          <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.sheetHeader}>
+              <span style={styles.sheetTitle}>New entry</span>
+              <button style={styles.sheetClose} onClick={() => setFormOpen(false)}><X size={20} /></button>
+            </div>
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>Site</label>
+              <div style={styles.siteChips}>
+                {SITES.map((s) => (
+                  <button key={s.id} onClick={() => setForm({...form, site: s.id})}
+                    style={{...styles.chip, ...(form.site === s.id ? {background: s.color, color: "#fff", borderColor: s.color} : {})}}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.fieldRow}>
+              <div style={{...styles.fieldGroup, flex: 1}}>
+                <label style={styles.label}>Date</label>
+                <input type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} style={styles.input} />
+              </div>
+              <div style={{...styles.fieldGroup, flex: 1}}>
+                <label style={styles.label}>Amount (AUD)</label>
+                <input type="number" inputMode="decimal" placeholder="0.00" value={form.amount}
+                  onChange={(e) => setForm({...form, amount: e.target.value})}
+                  style={{...styles.input, fontFamily: "'IBM Plex Mono', monospace"}} />
+              </div>
+            </div>
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>Payee / description</label>
+              <input type="text" placeholder="e.g. PFD Foodservice, Kashif fees, staff wages"
+                value={form.payee} onChange={(e) => setForm({...form, payee: e.target.value})} style={styles.input} />
+            </div>
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>Category</label>
+              <div style={styles.selectWrap}>
+                <select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} style={styles.select}>
+                  {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+                <ChevronDown size={16} style={styles.selectChevron} />
+              </div>
+            </div>
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>Entered by</label>
+              <div style={styles.siteChips}>
+                {PEOPLE.map((p) => (
+                  <button key={p} onClick={() => setForm({...form, enteredBy: p})}
+                    style={{...styles.chip, ...(form.enteredBy === p ? {background: "#1a2433", color: "#fff", borderColor: "#1a2433"} : {})}}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.fieldGroup}>
+              <label style={styles.label}>Notes (optional)</label>
+              <input type="text" placeholder="Anything worth flagging later" value={form.notes}
+                onChange={(e) => setForm({...form, notes: e.target.value})} style={styles.input} />
+            </div>
+
+            <button style={styles.saveBtn} onClick={addEntry} disabled={saving || !form.amount || !form.payee.trim()}>
+              {saving ? "Saving…" : "Save entry"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const styles = {
+  app: { fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", background: "#F7F5F0", minHeight: "100vh", maxWidth: 480, margin: "0 auto", paddingBottom: 100, position: "relative", color: "#1a2433" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", padding: "24px 20px 16px" },
+  eyebrow: { fontSize: 11, color: "#8a7a5c", marginBottom: 4 },
+  title: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  monthSelect: { fontFamily: "inherit", fontSize: 13, padding: "6px 10px", borderRadius: 8, border: "1px solid #d8d2c4", background: "#fff", color: "#1a2433" },
+  exportBtn: { display: "flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 11, padding: "5px 9px", borderRadius: 7, border: "1px solid #d8d2c4", background: "#fff", color: "#6b6455", cursor: "pointer" },
+  tabsRow: { display: "flex", gap: 8, padding: "0 20px 12px", overflowX: "auto" },
+  tab: { flexShrink: 0, fontFamily: "inherit", fontSize: 13, padding: "7px 14px", borderRadius: 999, border: "1px solid #d8d2c4", background: "#fff", color: "#6b6455", cursor: "pointer" },
+  tabActive: { borderColor: "#1a2433", color: "#1a2433", fontWeight: 600 },
+  totalsStrip: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: "0 20px 16px" },
+  totalCard: { background: "#fff", border: "1px solid #e7e2d6", borderRadius: 10, padding: "10px 12px", position: "relative" },
+  totalDot: { width: 8, height: 8, borderRadius: 999, marginBottom: 6 },
+  totalLabel: { fontSize: 11, color: "#6b6455", marginBottom: 2 },
+  totalValue: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 600 },
+  totalLabelDark: { fontSize: 11, color: "#b9c2d1", marginBottom: 2 },
+  totalValueDark: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 600, color: "#fff" },
+  errorBanner: { margin: "0 20px 12px", padding: "8px 12px", background: "#FBE9E7", color: "#8A3B2E", borderRadius: 8, fontSize: 13 },
+  list: { padding: "0 20px", display: "flex", flexDirection: "column", gap: 10 },
+  emptyState: { display: "flex", alignItems: "center", gap: 8, justifyContent: "center", color: "#8a8474", fontSize: 14, padding: "40px 0" },
+  row: { display: "flex", gap: 12, background: "#fff", border: "1px solid #e7e2d6", borderRadius: 12, padding: 12 },
+  rowIcon: { width: 34, height: 34, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  rowMain: { flex: 1, minWidth: 0 },
+  rowTop: { display: "flex", justifyContent: "space-between", gap: 8 },
+  rowPayee: { fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  rowAmount: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 600, flexShrink: 0 },
+  rowSub: { fontSize: 12, color: "#8a8474", marginTop: 2 },
+  rowNotes: { fontSize: 12, color: "#4a4636", marginTop: 4, fontStyle: "italic" },
+  fab: { position: "fixed", bottom: 24, right: "calc(50% - 240px + 20px)", width: 56, height: 56, borderRadius: 999, background: "#1a2433", color: "#fff", border: "none", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px rgba(26,36,51,0.35)", cursor: "pointer" },
+  sheetOverlay: { position: "fixed", inset: 0, background: "rgba(26,36,51,0.4)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 10 },
+  sheet: { background: "#F7F5F0", width: "100%", maxWidth: 480, borderRadius: "18px 18px 0 0", padding: "18px 20px 28px", maxHeight: "88vh", overflowY: "auto" },
+  sheetHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  sheetTitle: { fontSize: 17, fontWeight: 700 },
+  sheetClose: { background: "#fff", border: "1px solid #e7e2d6", borderRadius: 999, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" },
+  fieldGroup: { marginBottom: 14 },
+  fieldRow: { display: "flex", gap: 12 },
+  label: { display: "block", fontSize: 12, color: "#6b6455", marginBottom: 6 },
+  input: { width: "100%", fontFamily: "inherit", fontSize: 14, padding: "10px 12px", borderRadius: 9, border: "1px solid #d8d2c4", background: "#fff", color: "#1a2433" },
+  selectWrap: { position: "relative" },
+  select: { width: "100%", fontFamily: "inherit", fontSize: 14, padding: "10px 32px 10px 12px", borderRadius: 9, border: "1px solid #d8d2c4", background: "#fff", color: "#1a2433", appearance: "none" },
+  selectChevron: { position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "#8a8474", pointerEvents: "none" },
+  siteChips: { display: "flex", gap: 8, flexWrap: "wrap" },
+  chip: { fontFamily: "inherit", fontSize: 13, padding: "7px 14px", borderRadius: 999, border: "1px solid #d8d2c4", background: "#fff", color: "#4a4636", cursor: "pointer" },
+  saveBtn: { width: "100%", fontFamily: "inherit", fontSize: 15, fontWeight: 600, padding: "13px", borderRadius: 10, border: "none", background: "#1a2433", color: "#fff", marginTop: 4, cursor: "pointer" },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
