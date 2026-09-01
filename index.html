@@ -62,7 +62,7 @@
   </div>
 </div>
 
-<script type="text/babel" data-presets="react">
+<script type="text/plain" id="app-source">
 const { useState, useEffect, useMemo } = React;
 const { Plus, X, Fuel, Receipt, Wallet, Truck, Package, HelpCircle, ChevronDown, Loader2, Download, CloudOff } = lucide;
 
@@ -402,6 +402,17 @@ const styles = {
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Manually compile with the classic JSX runtime to avoid Babel's
+  // automatic-runtime output, which injects an ES "import" statement
+  // that classic (non-module) <script> tags can't execute.
+  var __src = document.getElementById("app-source").textContent;
+  var __compiled = Babel.transform(__src, {
+    presets: [["react", { runtime: "classic" }]]
+  }).code;
+  (0, eval)(__compiled);
 </script>
 
 <script>
