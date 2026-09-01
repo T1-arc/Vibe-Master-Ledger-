@@ -22,9 +22,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 
-<!-- Icons -->
-<script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
-
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #F7F5F0; }
@@ -64,7 +61,7 @@
 
 <script type="text/plain" id="app-source">
 const { useState, useEffect, useMemo } = React;
-const { Plus, X, Fuel, Receipt, Wallet, Truck, Package, HelpCircle, ChevronDown, Loader2, Download, CloudOff } = lucide;
+// Simple emoji-based icons instead of an external icon library (fewer moving parts, nothing to load)
 
 // ---- Firebase init ----
 firebase.initializeApp(window.FIREBASE_CONFIG);
@@ -79,16 +76,15 @@ const SITES = [
 ];
 
 const CATEGORIES = [
-  { id: "wages", label: "Wages & payroll", icon: "Wallet" },
-  { id: "fuel", label: "Fuel commission", icon: "Fuel" },
-  { id: "royalty", label: "VIBE royalty / fees", icon: "Receipt" },
-  { id: "purchases", label: "Purchases / stock", icon: "Package" },
-  { id: "opex", label: "Opex (utilities, repairs, misc)", icon: "Truck" },
-  { id: "drawings", label: "Director drawings", icon: "Wallet" },
-  { id: "loan", label: "Director loan", icon: "Wallet" },
-  { id: "other", label: "Other / unsure", icon: "HelpCircle" },
+  { id: "wages", label: "Wages & payroll", icon: "💰" },
+  { id: "fuel", label: "Fuel commission", icon: "⛽" },
+  { id: "royalty", label: "VIBE royalty / fees", icon: "🧾" },
+  { id: "purchases", label: "Purchases / stock", icon: "📦" },
+  { id: "opex", label: "Opex (utilities, repairs, misc)", icon: "🔧" },
+  { id: "drawings", label: "Director drawings", icon: "💰" },
+  { id: "loan", label: "Director loan", icon: "💰" },
+  { id: "other", label: "Other / unsure", icon: "❓" },
 ];
-const ICONS = { Wallet, Fuel, Receipt, Package, Truck, HelpCircle };
 const PEOPLE = ["Taha", "Usman"];
 
 const money = (n) =>
@@ -196,7 +192,7 @@ function App() {
   if (connError) {
     return (
       <div style={{...styles.app, ...styles.emptyState, flexDirection:"column", gap:10, paddingTop: 80}}>
-        <CloudOff size={28} color="#8a8474" />
+        <span style={{fontSize: 28}}>📴</span>
         <div style={{textAlign:"center", padding: "0 30px", fontSize: 14, color:"#6b6455"}}>
           Can't connect to Firebase yet. Open index.html and check that FIREBASE_CONFIG has your real project keys pasted in (see the comment near the top of the file).
         </div>
@@ -216,7 +212,7 @@ function App() {
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
           <button style={styles.exportBtn} onClick={exportCsv} disabled={entries.length === 0}>
-            <Download size={13} /> Export CSV
+            ⬇ Export CSV
           </button>
         </div>
       </header>
@@ -249,17 +245,17 @@ function App() {
 
       <main style={styles.list}>
         {!loaded ? (
-          <div style={styles.emptyState}><Loader2 size={18} className="spin" /><span>Loading the ledger…</span></div>
+          <div style={styles.emptyState}><span className="spin" style={{display:"inline-block"}}>⟳</span><span>Loading the ledger…</span></div>
         ) : filtered.length === 0 ? (
           <div style={styles.emptyState}><span>No entries for {monthLabel(monthFilter)} yet. Add the first one below.</span></div>
         ) : (
           filtered.map((e) => {
             const site = SITES.find((s) => s.id === e.site);
             const cat = CATEGORIES.find((c) => c.id === e.category);
-            const Icon = cat ? ICONS[cat.icon] : HelpCircle;
+            const iconChar = cat ? cat.icon : "❓";
             return (
               <div key={e.id} style={styles.row}>
-                <div style={{...styles.rowIcon, background: `${site.color}1A`, color: site.color}}><Icon size={16} /></div>
+                <div style={{...styles.rowIcon, background: `${site.color}1A`, color: site.color, fontSize: 16}}>{iconChar}</div>
                 <div style={styles.rowMain}>
                   <div style={styles.rowTop}>
                     <span style={styles.rowPayee}>{e.payee}</span>
@@ -276,14 +272,14 @@ function App() {
         )}
       </main>
 
-      <button style={styles.fab} onClick={() => setFormOpen(true)} aria-label="Add entry"><Plus size={24} /></button>
+      <button style={styles.fab} onClick={() => setFormOpen(true)} aria-label="Add entry"><span style={{fontSize: 24, lineHeight: 1}}>+</span></button>
 
       {formOpen && (
         <div style={styles.sheetOverlay} onClick={() => setFormOpen(false)}>
           <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
             <div style={styles.sheetHeader}>
               <span style={styles.sheetTitle}>New entry</span>
-              <button style={styles.sheetClose} onClick={() => setFormOpen(false)}><X size={20} /></button>
+              <button style={styles.sheetClose} onClick={() => setFormOpen(false)}><span style={{fontSize: 18, lineHeight: 1}}>×</span></button>
             </div>
 
             <div style={styles.fieldGroup}>
@@ -323,7 +319,7 @@ function App() {
                 <select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} style={styles.select}>
                   {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                 </select>
-                <ChevronDown size={16} style={styles.selectChevron} />
+                <span style={{...styles.selectChevron, fontSize: 14}}>▾</span>
               </div>
             </div>
 
